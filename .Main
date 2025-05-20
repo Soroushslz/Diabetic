@@ -1,0 +1,99 @@
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import RFE
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import mean_squared_error
+
+# Load the dataset
+data = pd.read_csv("diabetes.csv")
+
+# Replace missing values with the mean
+data = data.fillna(data.mean())
+
+# Split the data into input and output
+X = data.drop(columns=["Diabetes"])
+Y = data["Diabetes"]
+
+# Scale the data
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Perform feature selection using RFE
+selector = RFE(estimator=LogisticRegression(), n_features_to_select=7)
+X_selected = selector.fit_transform(X_scaled, Y)
+
+# Get the selected feature names
+selected_feature_names = X.columns[selector.support_]
+print("Selected Features:")
+print(selected_feature_names)
+
+# Split the data into training and testing sets
+X_train, X_test, Y_train, Y_test = train_test_split(X_selected, Y, test_size=0.2, random_state=1)
+
+# Define parameters
+ni = len(selected_feature_names) # number of features
+ns = 10 # number of time steps
+nf = 32 # number of filters
+nk = 5 # size of kernel
+stride = 1 # stride length
+padding = 'same' # padding mode
+dilation = 1 # dilation factor
+no = 1 # number of output
+
+# Define the CNN model architecture
+model_cnn = tf.keras.Sequential([ # type: ignore
+    tf.keras.layers.Conv1D(filters = nf, kernel_size = nk, strides = stride, padding = padding, activation = 'relu', input_shape = (ni, 1)), # type: ignore
+    tf.keras.layers.MaxPooling1D(pool_size = 3), # type: ignore
+    tf.keras.layers.Flatten(), # type: ignore
+    tf.keras.layers.Dense(no, activation = 'sigmoid') # type: ignore
+])
+
+# Calculate the number of zeros added by the padding
+if padding == 'same':
+    npad = int((nk - 1) / 2)
+elif padding == 'valid':
+    npad = 0
+else:
+    raise ValueError("Unknown padding mode")
+
+# Compile the model
+model_cnn.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(learning_rate=0.01), metrics=['accuracy']) # type: ignore
+
+# Reshape the data for the CNN model
+X_train_reshaped = np.reshape(X_train, (X_train.shape[0], ni))
+X_test_reshaped = np.reshape(X_test, (X_test.shape[0], ni))
+
+# Define the early stopping callback
+early_stopping = tf.keras.callbacks.EarlyStopping(patience=150, monitor='val_loss', restore_best_weights=True) # type: ignore
+
+# Train the CNN model
+history_cnn = model_cnn.fit(X_train, Y_train, epochs=200, batch_size=32, 
+                            validation_data=(X_test, Y_test), verbose=0, callbacks=[early_stopping])
+
+# Evaluate the CNN model on the test data
+test_loss_cnn, test_acc_cnn = model_cnn.evaluate(X_test_reshaped, Y_test)
+
+# Evaluate the CNN model on the train data
+train_loss_cnn, train_acc_cnn = model_cnn.evaluate(X_train_reshaped, Y_train)
+
+# Print the relationship between features and variables
+print("Relationship between Features and Variables:")
+weights = model_cnn.layers[0].get_weights()[0]
+sorted_features = [feature for _, feature in sorted(zip(weights[:, 0].flatten(), selected_feature_names), reverse=True)]
+for feature, weight in zip(sorted_features, sorted(weights[:, 0].flatten(), reverse=True)):
+    print(f"{feature}: {weight:.4f}")
+
+# Calculate the complexity of the CNN model
+CCNN = ni * nf * nk * (ns + 2 * npad - dilation * (nk - 1) - 1 / stride + 1)
+print("Complexity of the 1-D CNN model:", CCNN)
+
+# Print accuracy scores
+print("Train Accuracy: {:.2f}%".format(train_acc_cnn * 100))
+print("Test Accuracy: {:.2f}%".format(test_acc_cnn * 100))
+
+# Print MSE score
+mse_cnn = mean_squared_error(Y_test, model_cnn.predict(X_test_reshaped))
+print("Mean Squared Error: {:.4f}" .format(mse_cnn))
